@@ -320,3 +320,154 @@ If you find the torchao library useful, please cite it in your work as below.
   year={2024}
 }
 ```
+
+---
+
+# Building torchao with ROCm (TheRock) on Windows
+
+## Prerequisites
+- Windows with AMD GPU
+- TheRock ROCm & PyTorch installed in a Python venv
+- Visual Studio 2022 with C++ tools
+- Python 3.10+
+
+---
+
+## Step 1: Clone this fork
+
+```powershell
+git clone https://github.com/0xDELUXA/torchao_win-rocm
+cd torchao_win-rocm
+```
+
+---
+
+## Step 2: Set environment variables
+
+Activate your venv first, then set these:
+```powershell
+.\path\to\your\venv\Scripts\Activate.ps1
+```
+
+```powershell
+$env:ROCM_HOME = "$env:VIRTUAL_ENV\Lib\site-packages\_rocm_sdk_devel"
+$env:HIP_PATH  = "$env:VIRTUAL_ENV\Lib\site-packages\_rocm_sdk_devel"
+$env:PATH = "$env:VIRTUAL_ENV\Lib\site-packages\_rocm_sdk_devel\bin;" +
+            "$env:VIRTUAL_ENV\Lib\site-packages\_rocm_sdk_devel\lib\llvm\bin;" +
+            $env:PATH
+```
+
+---
+
+## Step 3: Generate hipblaslt.lib (one-time per venv)
+
+TheRock ships `libhipblaslt.dll` but no import library (`.lib`). The MSVC linker requires a `.lib` to link against a DLL. Generate it using `llvm-dlltool` from the ROCm SDK.
+
+### 3a. Dump the DLL exports
+
+> **Note:** Adjust the MSVC version number in the path if yours differs. You can find your installed version by browsing `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\`.
+
+```powershell
+$vctools = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\HostX64\x64"
+& "$vctools\dumpbin.exe" /EXPORTS "$env:VIRTUAL_ENV\Lib\site-packages\_rocm_sdk_devel\bin\libhipblaslt.dll" | Set-Content "libhipblaslt.dumpbin.txt" -Encoding utf8
+```
+
+### 3b. Parse the exports into a .def file
+
+```powershell
+@'
+lines = open('libhipblaslt.dumpbin.txt', 'rb').read().decode('ascii', errors='replace').splitlines()
+exports = []
+in_exports = False
+for line in lines:
+    if 'ordinal hint RVA' in line:
+        in_exports = True
+        continue
+    if in_exports and line.strip() == '' and len(exports) == 0:
+        continue  # skip the blank line after the header
+    if in_exports and line.strip() == '':
+        break
+    if in_exports:
+        parts = line.split()
+        if len(parts) >= 4:
+            exports.append(parts[3])
+with open('libhipblaslt.def', 'w') as f:
+    f.write('LIBRARY libhipblaslt\nEXPORTS\n')
+    for e in exports:
+        f.write(e + '\n')
+print(f'Wrote {len(exports)} exports')
+'@ | python
+```
+
+You should see: 
+```powershell
+Wrote <number> exports
+```
+(where `<number>` should be a large non-zero integer - typically in the hundreds)
+
+### 3c. Generate the import library
+
+```powershell
+& "$env:VIRTUAL_ENV\Lib\site-packages\_rocm_sdk_devel\lib\llvm\bin\llvm-dlltool.exe" `
+    -D "libhipblaslt.dll" `
+    -d "libhipblaslt.def" `
+    -l "$env:VIRTUAL_ENV\Lib\site-packages\_rocm_sdk_devel\lib\hipblaslt.lib" `
+    -m "i386:x86-64"
+```
+
+Verify it was created:
+
+```powershell
+Get-Item "$env:VIRTUAL_ENV\Lib\site-packages\_rocm_sdk_devel\lib\hipblaslt.lib"
+```
+
+You should see something like:
+```
+    Directory: C:\path\to\venv\Lib\site-packages\_rocm_sdk_devel\lib
+
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         01/01/2026    00:00         <size> hipblaslt.lib
+```
+
+---
+
+## Step 4: Build and install
+
+```powershell
+pip install -e . --no-build-isolation
+```
+
+The build will take a short while. At the end you should see:
+
+```
+Successfully built torchao
+Successfully installed torchao-<version number>...
+```
+
+---
+
+## Troubleshooting
+
+- **`hipblaslt.lib` not found during link**<br>
+The linker cannot find the import library. Confirm Step 3c completed without errors and that the file exists at `_rocm_sdk_devel\lib\hipblaslt.lib`. Also verify `ROCM_HOME` is set correctly in your current shell session.
+
+- **`VIRTUAL_ENV` is empty or not set**<br>
+The environment variable commands in Step 2 depend on `$env:VIRTUAL_ENV` being populated. Make sure your venv is activated (`.\venv\Scripts\Activate.ps1`) before running any of the build steps.
+
+- **`dumpbin.exe` not found**<br>
+The path in Step 3a includes a specific MSVC toolchain version number. Browse `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\` and update the version segment to match what is installed on your machine.
+
+- **`llvm-dlltool.exe` exits with no output but no `.lib` is created**<br>
+This usually means the `.def` file is malformed or empty. Check that Step 3b printed `Wrote <number> exports` with a non-zero count before proceeding to 3c.
+
+## Notes
+
+- **hipblaslt.lib is a one-time step**<br>
+The `.lib` generation in Step 3 only needs to be done **once per venv** - it persists in `_rocm_sdk_devel\lib` and does not need to be repeated on future builds.
+
+- **hipblaslt support varies by GPU**<br>
+Much of torchao's performance and operator coverage depends on hipblaslt. Whether a given kernel or quantization path works at all - and how fast it runs - is heavily determined by how well your specific GPU is supported by hipblaslt. If something silently falls back or errors, this is the most likely cause.
+
+> **Tested with:** torchao `0.17.0`, TheRock ROCm `7.12`, PyTorch `2.12`, Visual Studio 2022, Python 3.12, Windows 11

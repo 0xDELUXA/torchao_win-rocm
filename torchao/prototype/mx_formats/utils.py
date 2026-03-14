@@ -8,7 +8,10 @@ import sys
 from typing import Tuple
 
 import torch
-from torch.distributed._tensor import DTensor
+if torch.distributed.is_available():
+    from torch.distributed._tensor import DTensor
+else:
+    DTensor = None
 
 from torchao.prototype.mx_formats.config import (
     MXFP8Dim1CastKernelChoice,
@@ -192,7 +195,7 @@ def _to_mxfp8_dim1_kernel_wrapper(
         raise ValueError(f"must be one of [CUDA, TRITON], got {cast_kernel_choice}")
 
     is_swizzled_scales = False
-    if isinstance(a_data, DTensor):
+    if DTensor is not None and isinstance(a_data, DTensor):
         assert isinstance(a_scale, DTensor)
         a_data_local = a_data.to_local()
         a_scale_local = a_scale.to_local()

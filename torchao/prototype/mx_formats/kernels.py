@@ -10,8 +10,13 @@ from typing import Tuple
 
 import numpy as np
 import torch
-from torch.distributed.tensor import Replicate, Shard
-from torch.distributed.tensor.experimental import register_sharding
+if torch.distributed.is_available():
+    from torch.distributed.tensor import Replicate, Shard
+    from torch.distributed.tensor.experimental import register_sharding
+else:
+    Replicate = None
+    Shard = None
+    register_sharding = None
 from torch.utils._triton import has_triton
 
 from torchao.prototype.custom_fp_utils import (
@@ -1112,45 +1117,46 @@ if _mxfp8_cuda_kernels_available:
 
         return output_rowwise, output_colwise, scales_rowwise, scales_colwise
 
-    @register_sharding(torch.ops.torchao.mxfp8_quantize.default)
-    def custom_mxfp8_quantize_cuda_dim1_sharding(
-        x: torch.Tensor,
-        rowwise: bool,
-        colwise: bool,
-        scale_dim_x: int,
-        scale_dim_y: int,
-        fp8_format: str,
-        scaling_mode: str,
-    ):
-        # This function signature can be used to understand the shardings:
-        # _, colwise_data, _, colwise_scales = mxfp8_quantize_cuda(x, rowwise=False, colwise=True)
+    if register_sharding is not None:
+        @register_sharding(torch.ops.torchao.mxfp8_quantize.default)
+        def custom_mxfp8_quantize_cuda_dim1_sharding(
+            x: torch.Tensor,
+            rowwise: bool,
+            colwise: bool,
+            scale_dim_x: int,
+            scale_dim_y: int,
+            fp8_format: str,
+            scaling_mode: str,
+        ):
+            # This function signature can be used to understand the shardings:
+            # _, colwise_data, _, colwise_scales = mxfp8_quantize_cuda(x, rowwise=False, colwise=True)
 
-        # When inputs and scale are replicated, we return a quantized output tensor (replicated).
-        inputs_replicated = [None, Replicate(), None, Replicate()]
-        outputs_replicated = [None, Replicate(), None, None]
-        rule_for_input_replicated = (
-            inputs_replicated,
-            outputs_replicated,
-        )
+            # When inputs and scale are replicated, we return a quantized output tensor (replicated).
+            inputs_replicated = [None, Replicate(), None, Replicate()]
+            outputs_replicated = [None, Replicate(), None, None]
+            rule_for_input_replicated = (
+                inputs_replicated,
+                outputs_replicated,
+            )
 
-        # When inputs and scale are sharded along dim 0,
-        # we return a quantized output tensor (sharded along dim1 due to transpose).
-        inputs_sharded_dim0 = [None, Shard(0), None, Shard(0)]
-        outputs_sharded_dim1 = [None, Shard(1), None, None]
-        rule_for_input_sharded_dim0 = (inputs_sharded_dim0, outputs_sharded_dim1)
+            # When inputs and scale are sharded along dim 0,
+            # we return a quantized output tensor (sharded along dim1 due to transpose).
+            inputs_sharded_dim0 = [None, Shard(0), None, Shard(0)]
+            outputs_sharded_dim1 = [None, Shard(1), None, None]
+            rule_for_input_sharded_dim0 = (inputs_sharded_dim0, outputs_sharded_dim1)
 
-        # When inputs and scale are sharded along dim 1,
-        # we return a quantized output tensor (sharded along dim0 due to transpose).
-        inputs_sharded_dim1 = [None, Shard(1), None, Shard(1)]
-        outputs_sharded_dim0 = [None, Shard(0), None, None]
-        rule_for_input_sharded_dim1 = (inputs_sharded_dim1, outputs_sharded_dim0)
+            # When inputs and scale are sharded along dim 1,
+            # we return a quantized output tensor (sharded along dim0 due to transpose).
+            inputs_sharded_dim1 = [None, Shard(1), None, Shard(1)]
+            outputs_sharded_dim0 = [None, Shard(0), None, None]
+            rule_for_input_sharded_dim1 = (inputs_sharded_dim1, outputs_sharded_dim0)
 
-        acceptable_shardings = [
-            rule_for_input_replicated,
-            rule_for_input_sharded_dim0,
-            rule_for_input_sharded_dim1,
-        ]
-        return acceptable_shardings
+            acceptable_shardings = [
+                rule_for_input_replicated,
+                rule_for_input_sharded_dim0,
+                rule_for_input_sharded_dim1,
+            ]
+            return acceptable_shardings
 
 else:
 

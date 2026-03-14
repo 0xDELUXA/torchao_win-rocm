@@ -640,7 +640,6 @@ def get_extensions():
     for rocm_dir in rocm_source_dirs:
         rocm_sources.extend(glob.glob(os.path.join(rocm_dir, "*.cu"), recursive=True))
         rocm_sources.extend(glob.glob(os.path.join(rocm_dir, "*.hip"), recursive=True))
-        rocm_sources.extend(glob.glob(os.path.join(rocm_dir, "*.cpp"), recursive=True))
 
     # Add CUDA source files if needed
     if use_cuda:
@@ -747,6 +746,7 @@ def get_extensions():
                 py_limited_api=True,
                 extra_compile_args=extra_compile_args,
                 extra_link_args=extra_link_args,
+                libraries=["hipblaslt"] if use_rocm else [],
             )
         )
 
@@ -817,6 +817,7 @@ def get_extensions():
                 py_limited_api=True,
                 extra_compile_args=cutlass_90a_extra_compile_args,
                 extra_link_args=extra_link_args,
+                libraries=["hipblaslt"] if use_rocm else [],
             )
         )
 

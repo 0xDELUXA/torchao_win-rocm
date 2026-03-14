@@ -113,8 +113,8 @@ else:
     try:
         from pathlib import Path
 
-        # Load .so files
-        so_files = list(Path(__file__).parent.glob("_C*.so"))
+        # Load .so files (Linux) or .pyd files (Windows)
+        so_files = list(Path(__file__).parent.glob("_C*.so")) + list(Path(__file__).parent.glob("_C*.pyd"))
         if len(so_files) > 0:
             for file in so_files:
                 logger.debug(f"Loading {file}")
